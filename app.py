@@ -149,7 +149,7 @@ with st.sidebar:
             st.session_state.conversation_title = new_title
 
 # Main chat interface
-st.title("AI Chatbot Einführung in die Politische Philosophie")
+st.title("Nomos AI")
 
 # Inject custom CSS for larger font in chat
 st.markdown("""
