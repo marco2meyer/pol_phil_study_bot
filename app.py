@@ -106,18 +106,19 @@ def chat_with_ai(messages):
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     
     try:
-        # Get response from OpenAI
-        response = client.chat.completions.create(
-            model="gpt-4o",
+        # Get response from OpenAI and stream it
+        stream = client.chat.completions.create(
+            model="o3",
             messages=full_messages,
-            temperature=0.5,
-            max_tokens=1000
+            stream=True,
+            #temperature=0.5,
+            #max_tokens=1000
         )
-        bot_response = response.choices[0].message.content
-        return bot_response
+        for chunk in stream:
+            yield chunk.choices[0].delta.content or ""
     except Exception as e:
         st.error(f"Error generating response: {str(e)}")
-        return None
+        yield ""
 
 # Sidebar - Conversation Management
 with st.sidebar:
@@ -186,12 +187,13 @@ if prompt := st.chat_input("""Stelle irgendeine Frage."""):
 
     # Get AI response
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            response = chat_with_ai(st.session_state.messages)
-            if response:
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
-                log_message('assistant', response)
+        response_generator = chat_with_ai(st.session_state.messages)
+        full_response = st.write_stream(response_generator)
+        
+        # Add the complete response to session state and database
+        if full_response:
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            log_message('assistant', full_response)
 
 # Feedback section
 with st.expander("Bewerte diese Unterhaltung"):
