@@ -38,8 +38,8 @@ if 'user' not in st.session_state:
 # --- Authentication via URL parameter ---
 user_param = st.query_params.get('user', [None])
 
-if not user_param:
-    st.error("Bitte geben Sie einen Benutzernamen als URL-Parameter an (z.B. `?user=dein_name`)")
+if not user_param or user_param == [None]:
+    st.error("Bitte geben Sie einen Benutzercode als URL-Parameter an (z.B. `http://nomosai.streamlit.app/?user=benutzercode`)")
     st.stop()
 
 # Check if user exists in the database
@@ -149,6 +149,8 @@ with st.sidebar:
             )
             st.session_state.conversation_title = new_title
 
+    # Disclaimer section
+
 # Main chat interface
 st.title("Nomos AI")
 
@@ -165,7 +167,7 @@ if not st.session_state.current_conversation_id:
     conversation_id = create_conversation()
     switch_conversation(conversation_id)
     # Assistant starts the conversation
-    initial_message = "Hallo! Woran arbeitest du gerade im Kurs ›Einführung in die politische Philosophie‹? Ich kann dir helfen, Deinen Essay zu entwickeln, Feedback auf einen Essay-Entwurf geben, oder Verständnisfragen klären."
+    initial_message = "Hallo! Woran arbeitest du gerade im Kurs ›Einführung in die politische Philosophie‹? Ich kann dir helfen, Deinen Essay zu entwickeln, Feedback auf einen Essay-Entwurf geben, Verständnisfragen klären, oder ein Quiz erstellen, um Dein Verständnis zu prüfen."
     st.session_state.messages.append({"role": "assistant", "content": initial_message})
     log_message('assistant', initial_message)
 
@@ -220,3 +222,12 @@ with st.expander("Bewerte diese Unterhaltung"):
         })
         st.success("Danke für dein Feedback!")
 
+with st.expander("ℹ️ Wichtige Hinweise", expanded=False):
+    st.markdown("""
+    **Disclaimer:**
+    
+    Dieser Chatbot ist ein experimentelles System zu Studienzwecken.
+    Die bereitgestellten Informationen können unvollständig oder fehlerhaft sein.
+    Bei Prüfungen kann kein Anspruch auf Richtigkeit oder Vollständigkeit der Antworten geltend gemacht werden.
+    Eingegebene Daten können mit OpenAI geteilt und zu Trainingszwecken verwendet werden. Bitte gib keine sensiblen oder persönlichen Informationen ein.
+    """, unsafe_allow_html=True)
