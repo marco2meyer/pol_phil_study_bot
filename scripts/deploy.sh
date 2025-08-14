@@ -21,6 +21,14 @@ rsync -az --delete \
   --exclude 'scripts/*.sh~' \
   ./ root@"$SERVER_IP":"$REMOTE_DIR"/
 
+# Copy root .env for compose (Mongo credentials, etc.)
+if [[ -f ./.env ]]; then
+  echo "==> Copy ./.env to server:$REMOTE_DIR/.env"
+  scp ./.env root@"$SERVER_IP":"$REMOTE_DIR/.env"
+else
+  echo "[WARN] ./.env not found locally; Mongo service may fail without required vars" >&2
+fi
+
 # Copy per-bot env if a bot is specified
 if [[ -n "$BOT_NAME" ]]; then
   LOCAL_ENV_FILE="bots/${BOT_NAME}/.env.server"
@@ -34,15 +42,37 @@ if [[ -n "$BOT_NAME" ]]; then
 fi
 
 echo "==> Build and start containers on server"
-ssh root@"$SERVER_IP" bash -lc "set -e; cd '$REMOTE_DIR'; docker compose build --pull"
+ssh root@"$SERVER_IP" bash -lc "\
+  set -euo pipefail; \
+  test -f '$REMOTE_DIR/docker-compose.yml' || { echo 'docker-compose.yml missing in $REMOTE_DIR' >&2; exit 3; }; \
+  # Determine compose command
+  if docker compose version >/dev/null 2>&1; then COMPOSE_CMD='docker compose'; \
+  elif command -v docker-compose >/dev/null 2>&1; then COMPOSE_CMD='docker-compose'; \
+  else echo 'Neither docker compose nor docker-compose found on server' >&2; exit 4; fi; \
+  echo Using compose command: \"\$COMPOSE_CMD\"; \
+  \$COMPOSE_CMD -f '$REMOTE_DIR/docker-compose.yml' config >/dev/null; \
+  \$COMPOSE_CMD -f '$REMOTE_DIR/docker-compose.yml' build --pull \
+"
 
 if [[ -n "$BOT_NAME" ]]; then
   # Start only the requested bot (and dependencies via compose)
   echo "==> Starting service: ${BOT_NAME}"
-  ssh root@"$SERVER_IP" bash -lc "cd '$REMOTE_DIR'; docker compose up -d ${BOT_NAME}"
+  ssh root@"$SERVER_IP" bash -lc "\
+    set -euo pipefail; \
+    if docker compose version >/dev/null 2>&1; then COMPOSE_CMD='docker compose'; \
+    elif command -v docker-compose >/dev/null 2>&1; then COMPOSE_CMD='docker-compose'; \
+    else echo 'Neither docker compose nor docker-compose found on server' >&2; exit 4; fi; \
+    \$COMPOSE_CMD -f '$REMOTE_DIR/docker-compose.yml' up -d ${BOT_NAME} \
+  "
 else
   # Start all
-  ssh root@"$SERVER_IP" bash -lc "cd '$REMOTE_DIR'; docker compose up -d"
+  ssh root@"$SERVER_IP" bash -lc "\
+    set -euo pipefail; \
+    if docker compose version >/dev/null 2>&1; then COMPOSE_CMD='docker compose'; \
+    elif command -v docker-compose >/dev/null 2>&1; then COMPOSE_CMD='docker-compose'; \
+    else echo 'Neither docker compose nor docker-compose found on server' >&2; exit 4; fi; \
+    \$COMPOSE_CMD -f '$REMOTE_DIR/docker-compose.yml' up -d \
+  "
 fi
 
 echo "Deployment finished. Server: $SERVER_IP"
