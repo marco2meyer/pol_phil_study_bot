@@ -8,9 +8,13 @@ from bson import ObjectId
 import random
 import string
 from config import SYSTEM_PROMPT
+from supabase import create_client
+import extra_streamlit_components as stx
+import time
 
 # Load environment variables
 load_dotenv()
+AUTH_DEBUG = os.getenv("AUTH_DEBUG", "false").lower() in {"1", "true", "yes"}
 
 # MongoDB setup
 @st.cache_resource
@@ -25,6 +29,48 @@ conversations = db['conversations']
 feedback = db['feedback']
 users = db['users']
 
+# Supabase setup
+@st.cache_resource
+def get_supabase_client():
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_ANON_KEY")
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL oder SUPABASE_ANON_KEY fehlen in der Umgebungskonfiguration")
+    return create_client(url, key)
+
+supabase = None
+try:
+    supabase = get_supabase_client()
+except Exception as e:
+    st.error(f"Supabase-Initialisierung fehlgeschlagen: {e}")
+
+# Cookie manager for 1-day session persistence
+cookie_manager = stx.CookieManager()
+_ = cookie_manager.get_all()
+
+# Try to restore session from cookies when not authenticated.
+# CookieManager may need a rerun to fetch cookies; calling get_all() each run is fine.
+try:
+    if supabase and not st.session_state.get('supabase_session'):
+        cookies = cookie_manager.get_all()
+        at = cookies.get('sb_access_token')
+        rt = cookies.get('sb_refresh_token')
+        if at and rt:
+            try:
+                resp = supabase.auth.set_session(access_token=at, refresh_token=rt)
+                session = getattr(resp, 'session', None) or (resp.get('session') if isinstance(resp, dict) else None)
+                user = getattr(resp, 'user', None) or (resp.get('user') if isinstance(resp, dict) else None)
+                if session and user:
+                    email = (getattr(user, 'email', None) or user.get('email') or '').lower()
+                    st.session_state.supabase_session = session
+                    st.session_state.user_email = email
+                    st.session_state.user = email
+                    upsert_user_profile(email)
+            except Exception:
+                pass
+except Exception:
+    pass
+
 # Initialize session state
 if 'messages' not in st.session_state:
     st.session_state.messages = []
@@ -34,22 +80,187 @@ if 'conversation_history' not in st.session_state:
     st.session_state.conversation_history = []
 if 'user' not in st.session_state:
     st.session_state.user = None
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = None
+if 'supabase_session' not in st.session_state:
+    st.session_state.supabase_session = None
 
-# --- Authentication via URL parameter ---
-user_param = st.query_params.get('user', [None])
+# Email allow/whitelist check
+def is_allowed_email(email: str) -> bool:
+    email = (email or '').strip().lower()
+    if email.endswith('@uni-hamburg.de') or email.endswith('@studium.uni-hamburg.de'):
+        return True
+    try:
+        # optional whitelist collection
+        whitelisted = db.get_collection('whitelist_emails')
+        if whitelisted.find_one({"email": email}):
+            return True
+    except Exception:
+        pass
+    return False
 
-if not user_param or user_param == [None]:
-    st.error("Bitte geben Sie einen Benutzercode als URL-Parameter an (z.B. `http://nomosai.streamlit.app/?user=benutzercode`)")
+# User profile upsert in Mongo
+def upsert_user_profile(email: str):
+    now = datetime.now()
+    users.update_one(
+        {"email": email},
+        {"$setOnInsert": {"created_at": now},
+         "$set": {"email": email, "last_login_at": now}},
+        upsert=True,
+    )
+
+# --- Authentication UI (replaces URL parameter auth) ---
+def render_auth_ui():
+    st.title("Nomos AI")
+    # Persist auth view across reruns to keep error messages visible
+    st.session_state.setdefault('auth_view', 'Anmelden')
+    auth_view = st.radio(
+        "Authentifizierung",
+        options=["Anmelden", "Registrieren", "Passwort zurücksetzen"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="auth_view",
+    )
+
+    if auth_view == "Anmelden":
+        st.subheader("Anmeldung")
+        with st.form("login_form", clear_on_submit=False):
+            # Use common keys and English labels to help password managers
+            login_email = st.text_input("Email", key="email", placeholder="name@uni-hamburg.de")
+            login_password = st.text_input("Password", type="password", key="password", placeholder="••••••••")
+            submitted = st.form_submit_button("Anmelden")
+        if submitted and supabase:
+            try:
+                if not is_allowed_email(login_email):
+                    st.error("Nur E-Mail-Adressen der Universität Hamburg oder auf der Whitelist sind zugelassen.")
+                else:
+                    resp = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                    session = getattr(resp, 'session', None) or (resp.get('session') if isinstance(resp, dict) else None)
+                    user = getattr(resp, 'user', None) or (resp.get('user') if isinstance(resp, dict) else None)
+                    if session and user:
+                        st.session_state.supabase_session = session
+                        st.session_state.user_email = (getattr(user, 'email', None) or user.get('email')).lower()
+                        st.session_state.user = st.session_state.user_email
+                        upsert_user_profile(st.session_state.user_email)
+                        # Persist tokens for 1 day
+                        try:
+                            at = getattr(session, 'access_token', None) or (session.get('access_token') if isinstance(session, dict) else None)
+                            rt = getattr(session, 'refresh_token', None) or (session.get('refresh_token') if isinstance(session, dict) else None)
+                            if at and rt:
+                                cookie_manager.set('sb_access_token', at, key='set_at', path='/', max_age=86400, same_site='lax', secure=False)
+                                cookie_manager.set('sb_refresh_token', rt, key='set_rt', path='/', max_age=86400, same_site='lax', secure=False)
+                                cookie_manager.get_all()  # sync
+                                time.sleep(0.2)  # give browser time to persist cookies before rerun
+                        except Exception:
+                            pass
+                        st.success("Erfolgreich angemeldet.")
+                        st.rerun()
+                    else:
+                        st.error("Anmeldung fehlgeschlagen. Bitte prüfen Sie Ihre Zugangsdaten.")
+            except Exception as e:
+                st.error(f"Anmeldung fehlgeschlagen: {e}")
+
+    elif auth_view == "Registrieren":
+        st.subheader("Registrierung")
+        with st.form("signup_form", clear_on_submit=False):
+            signup_email = st.text_input("Email", key="signup_email", placeholder="name@studium.uni-hamburg.de")
+            signup_password = st.text_input("Password (min. 8 chars)", type="password", key="signup_password", placeholder="••••••••")
+            submitted = st.form_submit_button("Konto erstellen")
+        if submitted and supabase:
+            try:
+                if not is_allowed_email(signup_email):
+                    st.error("Nur E-Mail-Adressen der Universität Hamburg oder auf der Whitelist sind zugelassen.")
+                elif len(signup_password) < 8:
+                    st.error("Das Passwort muss mindestens 8 Zeichen lang sein.")
+                else:
+                    # Use Supabase default UI for email confirmation
+                    supabase.auth.sign_up({"email": signup_email, "password": signup_password})
+                    st.info("Vielen Dank! Bitte bestätigen Sie Ihre E-Mail-Adresse über den Link, den wir Ihnen gesendet haben.")
+            except Exception as e:
+                st.error(f"Registrierung fehlgeschlagen: {e}")
+
+    else:  # Passwort zurücksetzen
+        st.subheader("Passwort zurücksetzen")
+        with st.form("reset_form", clear_on_submit=False):
+            reset_email = st.text_input("Email", key="pwreset_email", placeholder="name@uni-hamburg.de")
+            submitted = st.form_submit_button("E-Mail zum Zurücksetzen senden")
+        if submitted and supabase:
+            try:
+                if not is_allowed_email(reset_email):
+                    st.error("E-Mail-Adresse nicht zugelassen.")
+                else:
+                    # Use Supabase default UI for password reset
+                    supabase.auth.reset_password_for_email(reset_email)
+                    st.success("Falls ein Konto existiert, wurde eine E-Mail zum Zurücksetzen des Passworts gesendet.")
+            except Exception as e:
+                st.error(f"Fehler beim Senden der Reset-E-Mail: {e}")
+
+def ensure_consent(email: str) -> bool:
+    """Returns True if consent was recorded (yes or no). Shows dialog if missing."""
+    doc = users.find_one({"email": email})
+    consent = (doc or {}).get("consent_research")
+    if consent is None:
+        st.warning("Zustimmung zur Forschungsauswertung")
+        st.write(
+            "Wir verbessern den Tutor-Chatbot durch anonyme Auswertung der Gesprächsdaten. "
+            "Dabei werden keine personenbezogenen oder identifizierbaren Informationen weitergegeben. "
+            "Stimmen Sie zu, dass Ihre Unterhaltung zu Forschungs- und Verbesserungszwecken anonymisiert ausgewertet wird?"
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Ja, einverstanden", key="consent_yes"):
+                users.update_one({"email": email}, {"$set": {"consent_research": True}})
+                st.success("Danke für Ihre Zustimmung.")
+                return True
+        with col2:
+            if st.button("Nein, ablehnen", key="consent_no"):
+                users.update_one({"email": email}, {"$set": {"consent_research": False}})
+                st.info("Ihre Entscheidung wurde gespeichert.")
+                return True
+        return False
+    return True
+
+# Gate app behind authentication and consent
+with st.sidebar:
+    if st.session_state.user_email:
+        st.write(f"Angemeldet als: {st.session_state.user_email}")
+        if AUTH_DEBUG:
+            with st.expander("Auth Debug"):
+                st.write("Cookies:", cookie_manager.get_all())
+                st.write("Has session:", bool(st.session_state.get('supabase_session')))
+        if st.button("Abmelden"):
+            try:
+                if supabase:
+                    supabase.auth.sign_out()
+            except Exception:
+                pass
+            # Clear auth cookies
+            try:
+                cookie_manager.delete('sb_access_token', key='del_at')
+                cookie_manager.delete('sb_refresh_token', key='del_rt')
+            except Exception:
+                pass
+            st.session_state.user_email = None
+            st.session_state.user = None
+            st.session_state.supabase_session = None
+            st.session_state.messages = []
+            st.session_state.current_conversation_id = None
+            st.session_state.conversation_history = []
+            st.success("Abgemeldet.")
+            st.rerun()
+    else:
+        if AUTH_DEBUG:
+            with st.expander("Auth Debug"):
+                st.write("Cookies:", cookie_manager.get_all())
+                st.write("Has session:", bool(st.session_state.get('supabase_session')))
+        # Render authentication UI in the sidebar (single instance)
+        render_auth_ui()
+
+if not st.session_state.user_email:
     st.stop()
 
-# Check if user exists in the database
-user_account = users.find_one({"username": user_param})
-if not user_account:
-    st.error(f"Benutzer '{user_param}' nicht gefunden. Zugriff verweigert.")
+if not ensure_consent(st.session_state.user_email):
     st.stop()
-
-# Set user in session state if validated
-st.session_state.user = user_param
 
 # MongoDB helpers
 def create_conversation():

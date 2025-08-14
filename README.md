@@ -11,9 +11,13 @@ Ein intelligenter Tutor-Chatbot für Studierende der politischen Philosophie (2.
 
 ## Zugang erhalten
 
-Der Chatbot verwendet eine benutzerbasierte Authentifizierung:
-- Öffnen Sie die App mit Ihrem Benutzercode: `http://nomosai.streamlit.app/?user=IHR_BENUTZERCODE`
-- Ohne gültigen Benutzercode ist kein Zugriff möglich
+Der Chatbot verwendet jetzt eine E-Mail/Passwort-Anmeldung über Supabase Auth:
+- Erstellen Sie ein Konto mit Ihrer Universitäts-E-Mail (`@uni-hamburg.de` oder `@studium.uni-hamburg.de`) und einem Passwort.
+- Alternativ sind vorab freigeschaltete E-Mail-Adressen zugelassen (Whitelist).
+- Bestätigen Sie Ihre E-Mail über den Link, den wir Ihnen zusenden.
+- Falls Sie Ihr Passwort vergessen haben, können Sie es per E-Mail zurücksetzen.
+
+Nach der Anmeldung werden Sie gefragt, ob Ihre Gespräche anonymisiert für Forschungszwecke ausgewertet werden dürfen. Es werden keine personenbezogenen oder identifizierbaren Informationen weitergegeben. Ihre Entscheidung (Ja/Nein) wird gespeichert und kann jederzeit geändert werden.
 
 ## Grundprinzipien
 
