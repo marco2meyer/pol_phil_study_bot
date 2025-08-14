@@ -1,6 +1,7 @@
 import streamlit as st
 from pymongo import MongoClient
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 import json
 from datetime import datetime
@@ -12,8 +13,10 @@ from supabase import create_client
 import extra_streamlit_components as stx
 import time
 
-# Load environment variables
-load_dotenv()
+# Load environment variables: root .env, then bot-local .env.local (override)
+ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(dotenv_path=ROOT / ".env")
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env.local", override=True)
 AUTH_DEBUG = os.getenv("AUTH_DEBUG", "false").lower() in {"1", "true", "yes"}
 
 # MongoDB setup

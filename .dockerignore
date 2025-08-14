@@ -6,8 +6,11 @@ __pycache__
 .gitignore
 .streamlit/packages.txt
 rag/files/*
+bots/*/rag/files/*
 .env
 .env.local
 .env.server
+bots/*/.env*
+bots/*/env
 node_modules
 **/.DS_Store

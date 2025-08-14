@@ -1,15 +1,5 @@
 services:
-  app:
-    build: .
-    container_name: polphil_app
-    env_file:
-      - .env
-    ports:
-      - "8501:8501"
-    depends_on:
-      - mongo
-    restart: unless-stopped
-
+  # Shared MongoDB for all bots (each bot uses its own database via MONGO_DB_NAME)
   mongo:
     image: mongo:7.0
     container_name: polphil_mongo
@@ -19,8 +9,27 @@ services:
     volumes:
       - mongo_data:/data/db
     ports:
-      # Expose for remote/local access; protect via firewall
       - "27017:27017"
+    restart: unless-stopped
+
+  # Example bot instance: phil_bot
+  # Uses the generic Dockerfile and runs the current app.py under /phil_bot
+  phil_bot:
+    build:
+      context: .
+      dockerfile: docker/Streamlit.Dockerfile
+      args:
+        BOT_REQ: bots/phil_bot/requirements.txt
+    container_name: phil_bot
+    env_file:
+      - bots/phil_bot/env
+    environment:
+      - APP_PATH=bots/phil_bot/app.py
+      - BASE_URL_PATH=phil_bot
+    ports:
+      - "8511:8501"
+    depends_on:
+      - mongo
     restart: unless-stopped
 
 volumes:
