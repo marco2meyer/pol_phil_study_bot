@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+.cache
+.git
+.gitignore
+.streamlit/packages.txt
+rag/files/*
+.env
+.env.local
+.env.server
+node_modules
+**/.DS_Store

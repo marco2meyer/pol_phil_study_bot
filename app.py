@@ -94,28 +94,122 @@ def update_conversation(conversation_id, messages):
 
 def chat_with_ai(messages):
     from openai import OpenAI
-    import httpx
 
-    # Explicitly initialize the OpenAI client, preventing Streamlit from passing a 'proxies' argument
-    client = OpenAI(
-        api_key=os.getenv('OPENAI_API_KEY'),
-        http_client=httpx.Client(proxies="")
-    )
-    
-    # Prepare messages for API call
-    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
-    
+    # Initialize OpenAI client
+    client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+    # Compose input with system prompt
+    input_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+
+    # Configure file_search tool
+    vector_store_id = os.getenv("OPENAI_VECTOR_STORE_ID")
+    tools = []
+    if vector_store_id:
+        tools = [{
+            "type": "file_search",
+            "vector_store_ids": [vector_store_id]
+        }]
+
+    model = os.getenv("OPENAI_MODEL", "gpt-5")
+
     try:
-        # Get response from OpenAI and stream it
-        stream = client.chat.completions.create(
-            model="o3",
-            messages=full_messages,
-            stream=True,
-            #temperature=0.5,
-            #max_tokens=1000
+        # Helper to read either dicts or SDK objects
+        def g(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        # Stream response deltas, then enrich citations after completion
+        # Suppress noisy Pydantic serialization warnings originating from SDK internals
+        import warnings
+        warnings.filterwarnings(
+            "ignore",
+            message="PydanticSerializationUnexpectedValue",
+            category=UserWarning,
+            module="pydantic",
         )
-        for chunk in stream:
-            yield chunk.choices[0].delta.content or ""
+        with client.responses.stream(
+            model=model,
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low"},
+            include=["file_search_call.results"],
+        ) as stream:
+            # Stream only textual deltas
+            for event in stream:
+                if g(event, "type") == "response.output_text.delta":
+                    delta = g(event, "delta", "") or ""
+                    if delta:
+                        yield delta
+
+            final = stream.get_final_response()
+
+        # After full text streamed, compute and emit citation footer
+        citations = []
+        used_file_search = False
+        for item in getattr(final, "output", []) or []:
+            if g(item, "type") == "file_search_call":
+                used_file_search = True
+            if g(item, "type") == "message" and g(item, "role") == "assistant":
+                for part in (g(item, "content") or []):
+                    if g(part, "type") == "output_text":
+                        for ann in (g(part, "annotations") or []):
+                            if g(ann, "type") == "file_citation":
+                                citations.append({
+                                    "file_id": g(ann, "file_id"),
+                                    "filename": g(ann, "filename"),
+                                })
+
+        footer = ""
+        if used_file_search and citations:
+            unique = []
+            seen = set()
+            for c in citations:
+                key = (c.get("file_id"), c.get("filename"))
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(c)
+
+            try:
+                file_ids = [c.get("file_id") for c in unique if c.get("file_id")]
+                meta_map = {}
+                if file_ids:
+                    cursor = db["literature_sources"].find({
+                        "openai_file_id": {"$in": file_ids}
+                    }, {"attributes": 1, "openai_file_id": 1})
+                    for doc in cursor:
+                        meta_map[doc.get("openai_file_id")] = doc.get("attributes", {})
+
+                def fmt_entry(c):
+                    fid = c.get("file_id")
+                    meta = meta_map.get(fid, {})
+                    title = meta.get("title") or c.get("filename") or "unbekannt"
+                    author = meta.get("author")
+                    session_num = meta.get("session_number")
+                    category = meta.get("category")
+                    parts = [title]
+                    det = []
+                    if author:
+                        det.append(author)
+                    if session_num is not None:
+                        det.append(f"Sitzung {session_num}")
+                    if category:
+                        det.append(str(category))
+                    if det:
+                        parts.append("(" + "; ".join(det) + ")")
+                    return " ".join(parts)
+
+                enriched_list = ", ".join(fmt_entry(c) for c in unique)
+                footer = "\n\n— 📚 Kursmaterial: " + enriched_list
+            except Exception:
+                footer = "\n\n— 📚 Kursmaterial (Dateien): " + ", ".join(
+                    f"{c.get('filename','unbekannt')}" for c in unique
+                )
+        elif vector_store_id:
+            footer = "\n\n— Hinweis: Keine Kursmaterialien zitiert (Allgemeines Wissen)."
+
+        if footer:
+            yield footer
     except Exception as e:
         st.error(f"Error generating response: {str(e)}")
         yield ""
