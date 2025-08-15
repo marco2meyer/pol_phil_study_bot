@@ -475,7 +475,7 @@ if not st.session_state.current_conversation_id:
     conversation_id = create_conversation()
     switch_conversation(conversation_id)
     # Assistant starts the conversation
-    initial_message = "Hallo! Woran arbeitest du gerade im Kurs ›Einführung in die politische Philosophie‹? Ich kann dir helfen, Deinen Essay zu entwickeln, Feedback auf einen Essay-Entwurf geben, Verständnisfragen klären, oder ein Quiz erstellen, um Dein Verständnis zu prüfen."
+    initial_message = "Hallo! Woran arbeitest du gerade im Kurs ›Einführung in die politische Philosophie‹? Ich kann dir helfen, einen Essay zu planen oder zu überarbeiten, Verständnisfragen zu klären, Texte aus der Pflichtlektüre gemeinsam zu erschließen, Argumente in Standardform zu rekonstruieren oder mit einem Quiz dein Wissen zu testen."
     st.session_state.messages.append({"role": "assistant", "content": initial_message})
     log_message('assistant', initial_message)
 
